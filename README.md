@@ -6,7 +6,13 @@ This repository publishes the **results, methodology and experimental record** f
 undergraduate final-year research project that I lead. The detector source code, trained weights
 and data pipeline are **kept private** (team IP and coursework under review).
 
-Every number on this CV-adjacent page is reproducible from the files in this repo.
+Every headline number on this page is reproducible from the files here, and where a number is
+not yet covered by a card it links to the specific experiment page that backs it.
+
+**Scope note.** The numbers in the table below come from two places, and the distinction matters:
+the per-family ablation figures are from the `main` branch, while the **Botnet k=30 result and its
+CTU-13 replication come from an experiment branch not yet merged**. Those are published here in
+[`k30/`](k30/) so the claims can be checked rather than taken on trust.
 
 ---
 
@@ -25,12 +31,18 @@ varies exactly one thing: per-flow versus relational.
 
 ## Headline result
 
-| | |
-|---|---|
-| Best fusion strategy, mean ROC-AUC across 7 held-out attack families | **0.9634** |
-| Held-out Botnet family, after tuning | **0.7200 → 0.9645** (paired t = 18.8) |
-| Replication | Second dataset (CTU-13, all 12 capture directions) + 4/4 benign training days |
-| Transfer to NF-UNSW-NB15-v2 | zero-shot 0.5816 → **0.8362** by refitting the feature scaler alone |
+| | | Source |
+|---|---|---|
+| Best fusion strategy, mean ROC-AUC across 7 held-out attack families (seed 0) | **0.9634** | [`ablation_table.md`](ablation_table.md) |
+| Held-out Botnet family at k=30 | **0.7200 → 0.9645** (paired t = 18.8) | [`k30/E92.html`](k30/E92.html) |
+| Botnet replication, second dataset (CTU-13) | all 12 capture directions | [`k30/E94.html`](k30/E94.html), [`k30/E95.html`](k30/E95.html) |
+| Botnet replication across benign training days | 4/4 days | [`k30/E93.html`](k30/E93.html) |
+| Transfer to NF-UNSW-NB15-v2 | zero-shot 0.5816 → **0.8362** by refitting the feature scaler alone | [`report_cards.md`](report_cards.md) |
+
+**On seed variance.** The 0.9634 above is a single-seed figure (seed 0) and is labelled as such.
+The multi-seed figures are higher and carry bands: 0.9558 ± 0.0044 (RC-21) and 0.9764 ± 0.0041
+([`papers_faceoff.md`](papers_faceoff.md)). The Botnet k=30 result is 3 seeds with paired t = 18.8.
+Single-draw and banded numbers are not interchangeable, and the ablation table says which is which.
 
 See [`ablation_table.md`](ablation_table.md) for the per-family breakdown and
 [`papers_faceoff.md`](papers_faceoff.md) for the comparison against published unsupervised IDS work.
@@ -66,6 +78,7 @@ lost to AutoGraphAD by 0.669 at connection granularity.
 | [`CHANGELOG.md`](CHANGELOG.md) | Append-only lab notebook for this track: what was tried, what worked, what didn't |
 | [`attack_mapper.json`](attack_mapper.json) | Anomaly → MITRE ATT&CK technique mapping |
 | [`SHAP_COMMANDS.md`](SHAP_COMMANDS.md) | Explainability workflow |
+| [`k30/`](k30/) | Experiment pages for the Botnet k=30 work and its CTU-13 / cross-day replications (E90–E95) |
 | `*.schema.json` | Feature-vector and scored-alert schemas |
 
 ## Team and scope
