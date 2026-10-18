@@ -1,0 +1,545 @@
+# Experiment report cards
+
+One card per run, newest at the top. Every card is reproducible from the
+command it names. Metrics are EDGE granularity through
+`alert_pipeline.score_window()` on the committed checkpoint unless stated.
+AUC = mean ROC-AUC across the 7 held-out CICIDS2017 families; P@100 = mean
+precision in the top 100 of the alert queue. Scores are deterministic for a
+fixed checkpoint; the ±6-point noise band applies only to retrained models.
+
+---
+
+> **Scope.** Cards for the detection-modelling track, which I lead. RC-14 and RC-25 (the red-team evasion harness) are authored by a teammate and are excluded here; they remain in the private project repo.
+
+
+## RC-32 — Third dataset: CTU-13 (real botnet traffic) — infected host in top 0.05% on all 3 scenarios
+
+**Date:** 2026-08-21 · **Run:** `detection/eval_external_ctu13.py --scenarios s1_neris s13_virut s3_rbot` (seed 0; binetflow.2format adapted via column map; train = Background flows before first `From-Botnet` flow; UNCOMMITTED)
+**Result:** three real-world botnet captures (Stratosphere Lab, CC-BY), university-edge traffic with 300k–500k unique hosts:
+
+| Scenario | Malware | Train (benign) | Graphs | Hosts | **Infected-host rank** | C&C/infra ranks |
+|---|---|---|---|---|---|---|
+| s1 | Neris | 675,537 flows | 78 | 522,167 | **257 (top 0.05%)** | DNS relay 35; C&C ~266–1000 |
+| s13 | Virut (fast-flux) | 14,915 flows | **4** | 314,177 | **179 (top 0.06%)** | **#1 and #2** |
+| s3 | Rbot (DGA) | 5,288 flows | **2** | 434,730 | **55 (top 0.013%)** | **#1** |
+
+Verdict:
+- The claim generalizes to *real* malware traffic on a *third* dataset family (different lab, different country, different decade, Argus NetFlows instead of CICFlowMeter).
+- Striking result: even with **2–4 training graphs** (bot started minutes into two captures), the infected host lands in the top 0.06% of half-million-host populations, and genuine botnet infrastructure takes rank #1–2 where identifiable.
+- Honest framing required: CTU-13 labels every destination the malware touched as part of `From-Botnet` flows, inflating the malicious set (up to 26,726 "attackers") — recall@100 is NOT meaningful here; quote infected-host percentile and infrastructure ranks instead.
+- Host-window P@100 = 0.02–0.11: same queue-noise story as RC-28, amplified by 16-hour captures of heterogeneous background.
+
+Caveats:
+- Single seed; s13/s3 trained on minutes of benign traffic (dataset property, disclosed).
+- JSON: `experiments/external_ctu13_results.json`; logs: `experiments/eval_ctu13_s1.log`, `eval_ctu13_s3.log`. Data: `data/CTU-13/*.binetflow` (gitignored).
+
+---
+
+## RC-31 — Non-relational baselines on identical features: graph model +4.7 pts over the best
+
+**Date:** 2026-08-21 · **Run:** `detection/eval_baselines_4seed.py --seeds 0 1 2 3` (full files; PCA recon error / Isolation Forest / plain MLP-AE hidden=32 latent=8 — all on the SAME v2 host-window feature matrices, same protocol; UNCOMMITTED)
+**Result:** mean AUC across 7 held-out families, 4 seeds:
+
+| Detector | Mean AUC | Per-seed |
+|---|---|---|
+| Isolation Forest | 0.9357 | [0.937, 0.9332, 0.9348, 0.9379] |
+| PCA reconstruction | 0.9417 | identical all seeds (closed-form) |
+| Plain MLP-AE (no graph) | 0.9517 | [0.9514, 0.9538, 0.9502, 0.9512] |
+| **Ours (GraphAE + MW fusion, RC-30)** | **0.9987 ± 0.0008** | — |
+
+Per-family (best non-relational vs ours):
+| Family | Best baseline | Ours | Δ |
+|---|---|---|---|
+| Botnet | 0.9335 (mlpae) | 0.9987 | +0.065 |
+| PortScan | 0.9520 (pca) | 0.9999 | +0.048 |
+| DDoS | 0.9627 (mlpae) | 1.0000 | +0.037 |
+| DoS | 0.9438 (if) | 1.0000 | +0.056 |
+| Infiltration | 0.9557 (if) | 0.9997 | +0.044 |
+| Patator | 0.9859 (pca) | 1.0000 | +0.014 |
+| WebAttacks | 0.9888 (pca) | 1.0000 | +0.011 |
+
+Verdict:
+- **Closes reviewer objection #3**: baselines re-run under identical conditions, not cited numbers. The relational layer adds +4.7 pts over the strongest non-relational model on the SAME features — well outside every noise band in this repo.
+- Gaps concentrate exactly where topology should matter (Botnet/PortScan/DDoS/DoS); smallest on flow-level-visible families (WebAttacks/Patator) — mechanistically coherent.
+- Honest corollary: the v2 shape features alone carry plain models to ~0.95. The paper's claim must be "aggregation + relations", not "features don't matter".
+- Caveat: at host-WINDOW unit, attackers occupy many windows so best-rank=1 everywhere even for baselines; AUC is the discriminating metric here.
+- JSON: `experiments/baselines_4seed.json`; log: `experiments/eval_baselines_4seed.log`.
+
+---
+
+## RC-30 — Feature set v2 (19 node features): 0.9998 ± 0.0000; Botnet +6.6 pts; gains are the FEATURES not capacity
+
+**Date:** 2026-08-21 · **Run:** `detection/eval_feature_set_v2.py --seeds 0 1 2 3` (LogScaler, 60s+300s, pure rank_mean fusion, CUDA-deterministic; UNCOMMITTED)
+**Result:** v2 mean AUC **0.9998 ± 0.0000** vs v1 0.9987 ± 0.0008 on the same protocol. JSON: `experiments/feature_set_v2_results.json` (4-seed; latent19 control saved separately).
+
+| Family | v1 (8 feats) | v2 (19 feats) | Δ |
+|---|---|---|---|
+| Botnet | 0.9328 ± 0.002 | **0.9987** | **+0.066** |
+| Patator | 0.9816 ± 0.004 | **1.0000** | +0.018 |
+| WebAttacks | 0.9951 | **1.0000** | +0.005 |
+| PortScan / DoS / DDoS / Infiltration | 0.999+ | 0.9997–1.0 | ≈ |
+| **MEAN** | 0.9987 ± 0.0008 | **0.9998 ± 0.0000** | |
+
+Verdict:
+- Gains land exactly where gotcha #15/"busy fileserver vs scanner" predicted: shape features (flows_per_out_peer, dst_port_entropy, bytes_ratio, protocol_entropy...) separate hosts that raw counts conflate.
+- **latent=19 control (no bottleneck): mean 0.9996, Botnet 0.9980 — ≈identical.** The improvement is feature CONTENT, not the new 19→8 bottleneck. Defends against the "it's just capacity" objection.
+- v2 was rebuilt from scratch this session: CLAUDE.md claimed "built, self-tested" but no trace existed in git, stashes, or working tree (lost uncommitted work). Now in `graph_builder.py` as `feature_set="v2"` (indices 0–7 identical to v1; old checkpoints unaffected).
+- Attacker ranks under v2: every family's attackers in top 34 (Botnet's 8 hosts: ranks 5–34).
+
+Caveats:
+- AUC near ceiling; quote family deltas, not the 4th decimal of the mean.
+- Same Monday-calibration optimism caveat as everything else.
+- UNCOMMITTED — commit before quoting.
+
+---
+
+## RC-29 — External replication on CSE-CIC-IDS2018: claim holds on a second dataset
+
+**Date:** 2026-08-21 · **Run:** `detection/eval_external_ids2018.py` (seed 0; schema_mapper-mapped third column convention; trained on 165k PRE-ATTACK benign flows only (01:00–01:14), evaluated on the post-attack day; UNCOMMITTED)
+**Result:** LOIC-HTTP DDoS day, 32,935 hosts, 10 attackers: **all 10 attackers rank 13th–24th of 32,935** (mean agg). recall@100 = 1.0. JSON: `experiments/external_ids2018_results.json`.
+
+| Metric | CICIDS2017 (7 families) | IDS2018 (LOIC-HTTP) |
+|---|---|---|
+| Hosts ranked | 2,500–8,500 | 32,935 |
+| Attackers | 1–8 | 10 |
+| Attacker ranks | 1–35 | **13–24** |
+| recall@100 | 1.0 | **1.0** |
+| P@100 ceiling (bad/100) | 0.01–0.08 | 0.10 |
+
+Verdict:
+- The core claim — "attackers concentrate at the very top of the host ranking" — replicates on a different dataset, year, attack type, and column convention.
+- The P@100 structural cap ALSO replicates (ceiling = bad/100 on both datasets).
+- Weakness found: host-WINDOW level P@100 = 0.01 (P@500 = 0.508) — only 777 attacker windows among 898,852, and 15 training graphs make weak window scores. Future work, honestly recorded.
+
+Caveats:
+- Single seed; single attack family (the only IDS2018 file with IP columns).
+- Train split is time-based (pre-attack benign) — clean, but only ~14 minutes of benign traffic.
+
+---
+
+## RC-28 — Small-window filter test: NEGATIVE (queue noise is drift, not junk windows)
+
+**Date:** 2026-08-21 · **Run:** `detection/diag_p100b.py` (seed 0, 60s windows, filter windows < K nodes, K ∈ {0,2,3,5,10}; UNCOMMITTED)
+**Result:** P@100 at host-window level is IDENTICAL across every K on every family. False positives occupying the top-100 have median 128–175 nodes — big busy windows, not degenerate ones.
+
+Verdict:
+- Hypothesis rejected cleanly. Top-of-queue noise comes from attack-day background shift (benign servers behaving unlike Monday) — a calibration/drift problem for M6, not a windowing fix.
+- Log: `experiments/diag_p100b.log`.
+
+---
+
+## RC-27 — P@100 structural cap diagnosed: metric unit, not detector failure
+
+**Date:** 2026-08-21 · **Run:** `detection/diag_p100.py` (seed 0; attacker ranks + P@100 at unique-host vs host-window units; UNCOMMITTED)
+**Result:** at unique-host level P@100 sits EXACTLY at bad/100 on every family (0.01–0.08) because there are only 1–8 attackers among thousands of hosts. Attackers themselves rank 1st–35th. At host-window level P@100 = 0.09–0.48.
+
+| family | bad | attacker ranks (fused) | P@100 hosts | P@100 host-windows |
+|---|---|---|---|---|
+| PortScan | 1 | 1 | 0.010 | 0.110 |
+| DDoS | 2 | 2, 4 | 0.020 | 0.430 |
+| Botnet | 8 | 3–35 | 0.080 | 0.390 |
+| WebAttacks | 1 | 1 | 0.010 | 0.330 |
+| Patator | 1 | 1 | 0.010 | 0.040* |
+| DoS | 1 | 3 | 0.010 | 0.300 |
+| Infiltration | 1 | 5 | 0.010 | 0.090 |
+
+Verdict:
+- **No model change can raise unique-host P@100 above bad/100 — it is mathematically capped.** Report attacker rank / recall@100 (=1.0) instead.
+- Per-host MAX aggregation fixes dilution outliers (Infiltration 5→1, DoS 3→1) but slightly hurts WebAttacks/Patator (1→11/12); mean-vs-max is a trade-off, not a win.
+- *Patator host-window 0.000 in this run vs RC-18's nonzero: different unit (host-window vs edge) and window size; queue saturation explanation from RC-18 still stands.
+
+---
+
+## RC-26 — Multi-window fusion 4-seeded + M5a-in/out ablation: pure 60s+300s wins; M5a actively harms
+
+**Date:** 2026-08-21 · **Run:** `detection/eval_mw_ablation_4seed.py --seeds 0 1 2 3` (full files, LogScaler, CUDA-deterministic flags, graphs cached across seeds; UNCOMMITTED)
+**Result:** six configs, identical host populations, 4 seeds:
+
+| Config | Mean AUC ± std | Verdict |
+|---|---|---|
+| **pure_rank_mean (60s+300s, NO M5a)** | **0.9987 ± 0.0008** | **new headline recipe** |
+| pure_rank_max | 0.9981 ± 0.0012 | ≈tied |
+| w60 alone | 0.9962 ± 0.0023 | strong |
+| w300 alone | 0.9961 ± 0.0034 | strong |
+| three_way_rm (+M5a) | 0.9872 ± 0.0015 | hurt by M5a |
+| m5a_multi (RC-25's recipe) | 0.9482 ± 0.0031 | **worst** |
+
+Verdict:
+- **Drop M5a from the multi-window fusion.** −5 pts vs pure, driven by WebAttacks flipping 0.50/0.69/0.99 across devices/arithmetic — M5a's contribution there is a coin flip. Gotcha #22 now has 4-seed evidence.
+- Fusion's real benefit is VARIANCE, not mean: +0.25 pts over singles is inside overlapping bands, but fusion's WORST seed (0.9978) beats both singles' worst (0.9929/0.9930).
+- **RC-25's "single-window" numbers were M5a-contaminated** ("60s = 0.968" was actually M5a⊕60s). True 60s-alone = 0.9962. The 0.9925 single-seed headline does not reproduce as stated; quote 0.9987 ± 0.0008 (pure) going forward.
+- Still beats PIKACHU 0.977 by +1.0 pt WITH error bars — first multi-seed-defensible claim vs the reference.
+- P@100 unchanged (~0.02 mean): AUC-only win.
+- Device matters: same seed gave WebAttacks 0.5048 (CPU retrain) vs 0.9948 (GPU) before determinism flags. All published numbers must state device + flags.
+- Env: torch 2.11.0+cu128 installed this session (RTX 3090); requirements.txt still pins CPU torch — UPDATE BEFORE NEXT MACHINE SETUP.
+- JSON: `experiments/mw_ablation_4seed.json`; log: `experiments/eval_mw_ablation_4seed.log`. Also run: `eval_mw_4seed.py` (earlier variant incl. M5a) → 0.9869 ± 0.0008 band, superseded by this ablation.
+
+---
+
+## RC-21 — Ablation table multi-seeded: fused_rank_max 0.9558 ± 0.0044 (4 seeds), gap to PIKACHU shrinks to 0.021
+
+**Date:** 2026-08-13 · **Run:** `detection/ensembler.py --limit 0 --seed 0 1 2 3` (full files, 60s, 60 ep/seed)
+**Result:** the headline fused_rank_max is now reproducible with a seed band — mean **0.9558 ± 0.0044** (vs single-run 0.9535). PIKACHU gap at host-window narrows to **0.021**. Logs: `experiments/ensembler_seed{0,1,2,3}.log`; JSON: `ablation_table.json`.
+
+| config | mean ± std | seeds |
+|---|---|---|
+| **fused_rank_max** | **0.9558 ± 0.0044** | [0.9534, 0.9607, 0.9593, 0.9498] |
+| M5b | 0.9171 ± 0.0163 | [0.9160, 0.9364, 0.9240, 0.8918] |
+| fused_mean | 0.9168 ± 0.0139 | [0.9179, 0.9329, 0.9219, 0.8947] |
+| fused_max | 0.8627 ± 0.0012 | [0.8626, 0.8645, 0.8623, 0.8613] |
+| M5a | 0.8417 ± 0.0000 | [0.8417, 0.8417, 0.8417, 0.8417] |
+
+Verdict:
+- **Headline is reproducible:** 4-seed band ±0.0044 is 25× tighter than the RC-10 retrain band (±0.11). The single-run 0.9535 was a fair draw; the mean is 0.9558.
+- **PIKACHU gap shrinks to 0.021** (0.977 vs 0.9558 ± 0.0044) — the strongest unsupervised CIC-IDS-2017 result is now ~2 pts from the published graph-NIDS bar, and it remains unsupervised (PIKACHU's AWTY repro used grid search on eval).
+- `fused_rank_max` remains the only fusion beating both inputs (+0.039 over M5b mean), confirming gotcha #17 on seeded full-file runs.
+- M5a is constant (fixed checkpoint) — all variance comes from M5b retraining.
+- WebAttacks drop fixed (gotcha #12): all 4 seeds include all 7 families (dropped 288,602/458,968 rows = 62.9% per seed).
+
+Caveats:
+- 60s host-window granularity; edge-level P@100 still lags (WebAttacks/Patator = 0.000).
+- PIKACHU's 0.977 used grid-search on eval; our fused_rank_max is unsupervised + banded.
+
+---
+## RC-20 — Temporal half REJECTED at edge granularity (fused 0.568 vs graph 0.706 mean edge AUC)
+
+**Date:** 2026-08-13 · **Run:** `experiments/temporal_edge_probe.py --epochs 100 --fused-epochs 100`
+**Result:** on the identical covered edge set (hosts with >= 5 consecutive 300s windows), the LSTM-sequence arm loses to the graph arm on 5 of 7 families (mean −0.14); the host-level +0.0005 null sharpens into a directional negative. Log/JSON: `experiments/temporal_edge_probe.{log,json}`.
+
+| family | covered | graph AUC | fused AUC |
+|---|---|---|---|
+| PortScan | 574/4404 (13%) | 0.2928 | 0.6028 |
+| DDoS | 252/2567 (10%) | 0.8305 | 0.5350 |
+| Botnet | 862/5350 (16%) | 0.7462 | 0.8250 |
+| Infiltration | 1001/6060 (17%) | 0.5923 | 0.5930 |
+| WebAttacks | 776/5217 (15%) | 0.7537 | 0.2674 |
+| Patator | 1862/8494 (22%) | 0.8658 | 0.4243 |
+| DoS / Heartbleed | 1785/9015 (20%) | 0.8630 | 0.7320 |
+| **mean** | — | **0.706** | **0.568** |
+
+Verdict:
+- Both arms trained on Monday (300s, 100 ep each: `gnn_model.train` graph half, `gnn_temporal_fused.train_fused` fused half); fused score = LSTM-block reconstruction error over the 5-window embedding sequence, graph score = node score at the block's END window; edge y = src rule. The comparison is valid BECAUSE the edge set is held fixed.
+- Temporal wins only PortScan (+0.31) and Botnet (+0.08); graph wins DDoS (+0.30), Patator (+0.44), WebAttacks (+0.49), DoS (+0.13).
+- **Thesis line:** "at host granularity the sequence half adds +0.0005; at edge granularity it subtracts 0.14 — the structural half carries M5b." RC-20 thread closed; no further temporal tuning within budget.
+- Caveat: fresh single-model graph arm (not the 5-member ensemble); 300s windows; relative same-set comparison only — cite the Δ, never the absolutes (PortScan graph 0.2928 vs shipped 0.8825).
+
+---
+
+## RC-19 — E7 AutoGraphAD face-off at connection granularity: honest negative, bar stands (F1 macro 0.173 vs 0.8423)
+
+**Date:** 2026-08-13 · **Run:** `experiments/unsw_connection_eval.py` (NF-UNSW-NB15-v2, 2,390,275 rows, 700k benign-only train, 60 ep, 1000-row windows, arms plain/sim_k5)
+**Result:** F1 macro 0.1731 / acc 0.9610 / bin AUC 0.8761 — AutoGraphAD's 0.8423 bar NOT cleared at the same unit; recorded as a loss plus the first same-unit unsupervised comparison. JSON/log: `experiments/unsw_connection_eval.{json,log}`.
+
+| arm | F1 macro | acc | bin AUC |
+|---|---|---|---|
+| plain | 0.1731 | 0.9610 | 0.8761 |
+| sim_k5 | 0.1728 | 0.9612 | 0.8762 |
+| AutoGraphAD | 0.8423 | 0.9769 | (not reported) |
+
+Verdict:
+- Three bugs fixed before the number means anything: `conn_features` was fit **per chunk at eval time** (score collapse; first run bin AUC 0.535); F1-macro was computed **inside class buckets** (flag-everything → 1.0 per class, garbage); benign one-vs-rest had tp/fp swapped. Now: `conn_stats` fit once on benign train, one-vs-rest on the global 10-class pool, best global threshold tuned offline (mirrors their disclosure).
+- bin AUC 0.876 shows the connection AE does rank attacks above benign; F1 macro is dragged down by per-family recall at one global threshold (Exploits 31k / Fuzzers 22k rows dominate, Worms 164 barely fire).
+- **k-sim message passing adds nothing at connection level (Δ 0.0003)** — the host-graph win does not transfer down to raw connections. Any future attempt at this bar must win at the feature level.
+- Caveat: 0.8423 is their cited NetSoft 2026 number (same release/unit/threshold-disclosure, different architecture — heterogeneous VGAE with richer edges).
+
+---
+
+## RC-18 — Patator P@100 = 0.000 resolved: a scoring/queue saturation problem, NOT gate or recall
+
+**Date:** 2026-08-13 · **Run:** `experiments/patator_probe.py` (rewritten against the shipped pipeline: `alert_pipeline.score_window`, Tuesday full file, 300s windows, attacker = src_ip of FTP/SSH-Patator rows, no hardcoding). Log/JSON: `experiments/patator_probe.{log,json}`.
+**Result:** the attacker IS in the graphs and IS ranked (best edge rank 11/702; 48 of 66 attacker rows inside window top-100, ranks 11–86); global P@100 = 0.000 is queue saturation, not detection failure.
+
+Findings:
+1. **Labels are direction-inverted:** all 13,835 Patator rows are src=172.16.0.1 (the FTP/SSH *victim* server) → dst=192.168.10.50, ports 21/22. The detector was never measuring the wrong host.
+2. **The relational score does the work (0.680); per_flow is blind (0.068)** — as expected for a scanning shape with few flows.
+3. **Global top-100 is owned by 192.168.10.x internal chatter scoring 0.695–0.698 — above the attacker's 0.680.** Monday-fitted calibration leaves Tuesday chatter uniformly high (same family as gotcha #20 saturation); a Tuesday-fitted scale would re-base these.
+
+Verdict:
+- RC-18's three-way question is answered: NOT (a) recall, NOT (c) the agreement gate (gate off here) — it is (b) **score calibration** on the operational metric. Host-level AUC 0.86–0.97 is unaffected and real.
+- **Quote for the thesis:** "host-level AUC is real; edge-level P@100 is a queue-calibration artefact; per-window P@100 is nonzero (48/66 rows in top-100)." Stays on the calibration wishlist — NOT a retraining issue.
+- Caveat: 300s windows here; the earlier gate-bug tests showed the same 0.000 at 60s, and the conclusion transfers (scores scale, queue owners do not change).
+
+---
+
+## RC-17 — E9 M5a flow-level improvement: ctx features lift 0.8429 → 0.9036 ± 0.0042; scoring plateau confirmed; retraining stopped
+
+**Date:** 2026-08-13 · **Runs:** `m5a_improve_v2.py --arms shipped ctx --seeds 0 1 2 --epochs 100` (+ `m5a_ctx_diag.py`, `m5a_stdz_probe.py` on saved ckpts, then `--arms shipped ctx2 --seeds 0 1 --epochs 100`)
+**Result:** window-context features (93 dims) are a real, seed-stable win (+0.061, ~14× the ±0.004 seed band); scoring variants are exhausted (standardization destructive, rank-transform plateaus, plain top5/mean best); the concentration-ratio arm (ctx2) is REJECTED; per the pre-committed stop condition the flow-level thread is **closed**.
+
+| arm | mean ± std | best agg | seeds |
+|---|---|---|---|
+| shipped (control) | 0.8429 | 0.8429 (mean) | [0.8429] |
+| **ctx** | **0.9036 ± 0.0042** | **0.9128 ± 0.0071 (p95)** | [0.9039, 0.9086, 0.8983] |
+| ctx2 (ratio feats) | 0.8927 ± 0.0044 | 0.9042 ± 0.0028 (p95) | 2 seeds |
+
+Verdict:
+- **Ctx dims are strong individually; the weakness is the feature SET, not the architecture.** Single-dim per-dim-error AUC: Patator ws_b_bwd 1.000, PortScan ws_* ~1.000, DDoS ws_flows 0.992 / wd_src 0.984, DoS ws_flows 0.996. Aggregation dilutes them; no scoring variant fixes that.
+- **MAD-per-dim standardization is a dead end** (cross-day benign drift → alarms: Patator 0.9906→0.5838, DDoS→0.5191, WebAttacks→0.4771; the one Infiltration win 0.8039→0.9581 would be label leakage to trust). Rank-transform plateaus at/below plain top5 (DDoS 0.7502 vs 0.8102).
+- **Saturation confirmed:** DDoS/PortScan `ws_flows`/`wd_flows`/`ww_flows` reconstruct at 1.0 on 92–100% of attack flows — Monday's fitted max is the training-cloud boundary.
+- **ctx2 rejected on both seeds** (DDoS 0.682–0.692 vs ctx 0.729–0.767): ratio dims pin at 1.0 for floods on Monday's log1p scale and reconstruct near-zero error — dead dims. The rejection is not a seed artefact (gap ≈ 0.011 > band, DDoS down 0.05–0.08 on both seeds).
+- **Stop condition executed:** flow-level M5a is a documented plateau. vs papers at flow level: PIKACHU 0.977 gap 0.064–0.074 NOT closed (proven plateau, not noise); Anomal-E 0.883 CLEARED by every ctx aggregate; EULER 0.757 / VGRNN 0.641 cleared. Relational headline (fused_rank_max 0.9535 host-window, unsupervised) stands vs AWTY supervised pooled 0.92–0.96.
+- Checkpoints `m5a_improve_v2_ctx_s{0,1,2}.pt` / `_ctx2_s{0,1}.pt`; `docs/papers_faceoff.md` updated.
+
+---
+
+## RC-16 — E4b k=20 multi-seed: sim-edge lever fully confirmed, trade quantified
+
+**Date:** 2026-08-13 · **Run:** `experiments/sim_edges_ms.py --k 20 --repeats 3` (+ RC-13's k=0/k=5 repeats)
+**Result:** k=20 pooled mean AUC 0.8581 (+0.010 over k=5, +0.030 over control) but the worst P@100 (0.216). The lever is monotone in k and its trade is now quantified.
+
+| arm | pooled AUC | pooled P@100 | trend |
+|---|---|---|---|
+| k=0 | 0.8284 | 0.249 | baseline |
+| k=5 | 0.8481 | 0.255 | relational families up, volume −0.01 |
+| k=20 | 0.8581 | **0.216** | WebAttacks 0.851→0.956, Botnet 0.609→0.714; DDoS 0.929→0.852, DoS 0.967→0.900 |
+
+Verdict:
+- **Confirmed and monotone:** 3-repeat means rise 0.8284 → 0.8481 → 0.8581 with
+  tight repeat std (±0.01–0.07 per family). The families that lift
+  (WebAttacks, Patator, PortScan, Botnet) and those that pay (DDoS, DoS) are
+  the same at every k — aux edges amplify the relational signal and blur the
+  volume signal.
+- **P@100 peaks at k=5 and collapses at k=20** (0.255 → 0.216) — dense
+  similarity graphs wash out exactly the ordering the alert queue needs. If
+  this ever ships, it is k=5, never k=20. It still does not ship (build-path
+  change, D/demo sign-off; magnitude below the RC-10 band's practical value).
+- Final record: `experiments/sim_edges_ms.md` (k=0/5/20 combined). Sim-edge
+  question is now closed.
+
+---
+
+## RC-15 — Ablation table re-run: full files, seeded; headline survives
+
+**Date:** 2026-08-13 · **Run:** `detection/ensembler.py --limit 0 --seed 0` (the CLAUDE.md #1 outstanding item — replaces `--limit 150000`, unseeded)
+**Result:** host-window mean ROC-AUC — fused_rank_max 0.9535, M5b 0.9238, fused_mean 0.9171, fused_max 0.8751, M5a 0.8417.
+
+| config | old (150k, unseeded) | new (full, seed 0) | Δ |
+|---|---|---|---|
+| M5a | 0.8417 | 0.8417 | 0.0000 |
+| M5b | 0.9169 | **0.9238** | +0.0069 |
+| fused_max | 0.8735 | 0.8751 | +0.0016 |
+| fused_mean | 0.9109 | 0.9171 | +0.0062 |
+| fused_rank_max | 0.9567 | **0.9535** | −0.0032 |
+
+Verdict:
+- **Same winner, same ranking, every change inside the ±0.11 retrain band** — the ablation headline is no longer stale: rank-position fusion beats both inputs (+0.030 over M5b alone), M5b is the workhorse, and M5a alone is unreliable (WebAttacks 0.3904).
+- Full data lifted M5b the most (+0.007) — more Monday normality helps the graph arm.
+- M5b now scores its former weakest families best at node granularity: WebAttacks 0.9569, Patator 0.9568 (Patator P@100 0.450).
+- File: `detection/ablation_table.md` (regenerated; old figures were the stale item flagged in CLAUDE.md).
+
+---
+
+## RC-13 — E4b multi-seed: similarity edges (k=5) are a repeat-reproducible lever
+
+**Date:** 2026-08-13 · **Run:** `experiments/sim_edges_ms.py --k 0 5 --repeats 3 --window 300` (3 independent 5-seed ensembles per arm, edge-level M5b alone, node-rank+edge-rank mean)
+**Result:** k=5 beats k=0 in all 3 repeats with tight repeat spread. Pooled mean AUC 0.8284 → 0.8481 (+0.020).
+
+| family | k=0 (mean ± repeat-std) | k=5 | Δ |
+|---|---|---|---|
+| Botnet | 0.6090 ± 0.0093 | 0.6656 ± 0.0274 | **+0.057** |
+| WebAttacks | 0.8510 ± 0.0718 | 0.8877 ± 0.0295 | +0.037 |
+| Patator (FTP/SSH) | 0.9188 ± 0.0068 | 0.9506 ± 0.0083 | +0.032 |
+| PortScan | 0.8989 ± 0.0185 | 0.9196 ± 0.0332 | +0.021 |
+| Infiltration | 0.6251 ± 0.0332 | 0.6354 ± 0.0089 | +0.010 |
+| DDoS | 0.9288 ± 0.0171 | 0.9208 ± 0.0175 | −0.008 |
+| DoS / Heartbleed | 0.9674 ± 0.0028 | 0.9573 ± 0.0038 | −0.010 |
+
+Verdict:
+- **The effect is reproducible (repeat std ±0.01–0.03 per family, same direction in all 3 repeats) and mechanistically coherent:** feature-twin aux edges give hosts with few real peers (scanners, one-shot attackers) a neighbourhood to learn against; volume families (DDoS/DoS) already have dense real neighbourhoods and pay a small −0.01.
+- This resolves RC-12's single-seed ambiguity: the pooled +0.020 is smaller than the RC-10 host-granularity band, but at EDGE granularity across repeats it is stable, so it is a real lever, not luck. It is also NOT the priority lever — magnitude is an order below the scaler finding (RC-11) and the E1 band.
+- k=10 (dip) and k=20 (single-seed 0.8721) remain unconfirmed; k=5 is the confirmed setting if the project wants it.
+- NOT shipped: wiring KNN edges into the streaming build path (`graph_builder`/`alert_pipeline`) is a production change for the demo person to sign off; evidence is ready if wanted.
+
+---
+
+## RC-12 — E4 similarity (KNN) auxiliary edges: directional, sub-noise, needs multi-seed
+
+**Date:** 2026-08-13 · **Run:** `experiments/sim_edges.py --k 0 5 10 20 --window 300` (5-seed ensembles, single run per arm, edge-level M5b alone, src rule)
+**Result:** mean AUC 0.8380 → 0.8616 (k=5) → 0.8156 (k=10) → 0.8721 (k=20). The full swing is 5.7 pts — inside the 6-point band, so single-seed this is **directional, not a claim**.
+
+| k | mean AUC | mean P@100 |> 5 families | notable
+|---|---|---|---|---|
+| 0 (control) | 0.8380 | 0.211 | — | |
+| **5** | **0.8616** | 0.244 | 6/7 | +PortScan 0.924→0.974, +WebAttacks 0.905→0.983, +Patator 0.900→0.967 |
+| 10 | 0.8156 | 0.230 | 3/7 | −WebAttacks 0.767, −PortScan 0.867 |
+| 20 | 0.8721 | 0.239 | 4/7 | +Infiltration 0.607→0.739 (biggest single move) |
+
+Verdict:
+- **K=5 vs control is reproducible in direction:** the same three families lift in BOTH independent k=0→k=5 pairs (this run and the crashed-in-k=5 rerun): PortScan, WebAttacks, Patator. That's the only stable pattern; its magnitude (≈+0.02 mean AUC) is still within the ±0.06–0.11 noise band from RC-10.
+- **k=10 dips below control** → the effect is non-monotone, which is itself evidence parts of it are noise. k=20's Infiltration +0.13 is the largest, least-expected move — treat as unconfirmed.
+- Sim edges change message-passing neighbourhoods, not features; denser graphs (k≥10) wash out individual host signals, matching the "no free lunch from graph shape" pattern of gotcha #15.
+- **Decision: not a shipped change on this evidence.** Before spending retrain-time on a k=5 default, multi-seed k=0 vs k=5 (pending) over 3 repeats must clear the RC-10 band.
+- Full table: `experiments/sim_edges.md`.
+
+---
+
+## RC-11 — E5 UNSW-NB15 transfer: the scaler is the transfer lever
+
+**Date:** 2026-08-13 · **Run:** `experiments/unsw_transfer.py --train-rows 700000 --epochs 60 --seeds 5`
+**Result:** Monday-trained weights transfer to a foreign network once the NodeScaler is refit; retraining the weights is the small part.
+
+| arm | host-level AUC |
+|---|---|
+| `zero_shot` (shipped weights+scaler, no UNSW data) | 0.5816 |
+| `refit_scaler` (weights frozen, scaler refit on UNSW benign) | **0.8362** |
+| `finetune` (ship→UNSW, 60 ep) | 0.8798 |
+| `target_only` (scratch) | 0.8946 |
+
+Verdict:
+- **+0.255 AUC from the scaler alone** (0.5816 → 0.8362); weight finetuning adds +0.044, retrain-from-scratch caps at 0.8946. Same shape as gotcha #14 (scaling ≫ everything), re-derived on an entirely different network. Operational recipe: on a new network keep the weights and refit `NodeScaler` on one day of benign — ~85% of the retrain ceiling at zero training cost.
+- naive `zero_shot` (0.58) is the honest "Monday model dropped on a foreign network" number — do not ship that.
+- **Data caveat:** NF-UNSW-NB15-v2 has only 40 distinct src IPs; all 9 attack families are the same 4 src hosts → the per-family table (identical AUC across families) is degenerate, not a finding. This release cannot form a real host graph (gotcha #6/#12 class).
+- **F1 macro is NOT reported against AutoGraphAD's 0.8423** — different granularity (host-window vs connection-node) and base rate (4 attackers/~40 hosts). Bar is AUC-only; a connection-node variant would be required for the F1 claim.
+- Full detail: `experiments/unsw_transfer.md`.
+
+---
+
+## RC-10 — E1 seed-repeat protocol: the honest uncertainty band on every shipped number
+
+**Date:** 2026-08-13 · **Run:** `experiments/seed_protocol.py --groups 5 --window 300` (5 independent retrains, seeds 0..24, Monday benign, 300s; eval 300s/agreement/rank_mean/rolling = production config)
+**Result:** every production number carries a ±10–13-point retrain-to-retrain band. The shipped anchor was a fair draw.
+
+| config | mean AUC ± std | mean P@100 ± std |
+|---|---|---|
+| M5b alone | **0.8170** ± 0.1299 | **0.267** ± 0.214 |
+| `agreement` (shipped default) | 0.8034 ± 0.1085 | 0.268 ± 0.257 |
+
+Verdict:
+- **The ±0.109 mean-AUC band dwarfs the ±0.06 rule and every config difference measured so far.** Independent retrains swing the mean by 10.9 points; the shipped anchor (M5b 0.8391 / agreement 0.8304) sits inside the band, so the anchor was neither lucky nor unlucky, and the fusion-fix claim stands.
+- Facts that SURVIVE the band (useful signal, not noise):
+  - DoS is the strongest family (M5b 0.9488±0.019, agree 0.9242±0.035).
+  - **Patator agreement P@100 = 0.000 ± 0.000 across all 5 retrains** — the gate's per-flow conditions reliably keep Patator out of the top 100. A stable weak spot of the shipped gate, not a seed artefact.
+  - **Agreement still lifts DDoS P@100 over M5b alone** (0.748 ± 0.040 vs 0.656 ± 0.035) — the P@100 win that justified shipping agreement survives retraining.
+- Family-level noise is wide: Botnet swings 0.65±0.05, WebAttacks 0.82±0.04 in agreement. Differences below those bands are unverifiable at this N.
+- Caveat: E1 trains at 300s (98 graphs) while the shipped checkpoint trained at 60s (487 graphs); the band measures the variance of the **production retrain path**, not the old training shape.
+- Checkpoints archived `experiments/seed_checkpoints/ensemble_seed{0,5,10,15,20}.pt` (all 300s-trained).
+
+---
+
+## RC-08 — Window 300s + agreement gate: the shipped defaults change
+
+**Date:** 2026-08-13 · **Run:** `experiments/production_eval.py --with-m5a --fusions mean agreement --rules rank_mean --window 300`
+**Result:** the fusion fix ships.
+
+| config (300s) | mean AUC | mean P@100 | WebAttacks AUC |
+|---|---|---|---|
+| M5b alone (`rank_mean`) | **0.8391** | 0.324 | 0.9179 |
+| **agreement fusion (new default)** | 0.8304 | 0.313 | **0.8967** |
+| mean fusion (old default) | 0.7649 | 0.297 | 0.1931 |
+| roll_cal M5b alone | 0.8137 | 0.320 | 0.9416 |
+
+Verdict:
+- `agreement` is the only fusion rule measured that is within ~1 AUC point of
+  M5b alone while fixing the WebAttacks collapse (+0.70 AUC over `mean`).
+  M5a's anti-correlated score can no longer poison the queue; it still adds
+  P@100 on DDoS/Botnet/Infiltration where the detectors genuinely agree.
+- 300s beats 60s on AUC for the base detector (0.8148 -> 0.8391, +0.024).
+  The 60s P@100 edge (0.426 vs 0.324) was partly tie-order artifact — see RC-06.
+- Changed: `score_window` defaults to `window_seconds=300`, `fusion="agreement"`.
+- Next: seed-repeat the 300s numbers across retrained ensembles.
+
+---
+
+## RC-07 — roll_cal: population-percentile src score
+
+**Date:** 2026-08-13 · **Run:** `experiments/production_eval.py --fusions mean --rules rank_mean roll_cal --window 300`
+**Result:** mean 0.8137/0.320 vs rank_mean 0.8391/0.324 — loses. The node
+percentile against the current population is finer-grained than rank01, but
+the raw calibrated node scores saturate on attack days (everything scores
+above the Monday benign maximum), so the top of the population percentile is
+crowded with ties at 1.0 — the plateau moved, it did not disappear. Big P@100
+swings per family (Botnet 0.540->0.750, Infiltration 0.230->0.470) are the
+tie-luck changing hands. Dead end as a default; kept as an ablation rule.
+
+---
+
+## RC-06 — The tie-plateau: why the 60s top-100 was partly tie order
+
+**Date:** 2026-08-13 · **Runs:** `experiments/production_eval.py --fusions mean --rules rank_mean [--window 300]`
+**Result:** 60s M5b-alone P@100 0.426 contains a large artifact. Diagnosis
+(`temp/gate_diag.py`, `temp/displace.py`): in 60s windows of 2-3 edges,
+`rank01` of the already-calibrated node scores collapses to values like
+{0, 0.5, 1}; thousands of unrelated edges tie at exactly 0.500 and the global
+top-100 fills with stream tie order. Patator's 0.500 P@100 at 60s is such
+tie-luck — the gate's boost displaces the plateau and it drops to 0.000.
+At 300s ranks are fine-grained: Patator 0.250, queue is real signal.
+**Conclusion:** P@100 differences at the 0.4 level between 60s configurations
+are not fully trustworthy; report per-family and prefer 300s.
+
+---
+
+## RC-05 — Per-edge agreement gate (tau=0.5), 60s windows
+
+**Date:** 2026-08-13 · **Run:** `experiments/production_eval.py --with-m5a --fusions mean agreement --rules rank_mean`
+**Result:** agreement 0.8140/0.373 vs mean 0.7440/0.346, WebAttacks 0.1714 ->
+0.8362. Gate open only where both detectors flag the edge's source above the
+median of their own scales. Recovers the catastrophic family but stays ~0.9
+points below M5b alone (0.8148). Per-window Spearman gate (RC-04) replaced:
+within-window correlation is noise by construction — both sub-scores are
+forced uniform within a window.
+
+---
+
+## RC-04 — Per-window agreement (Spearman) gate: dead end
+
+**Date:** 2026-08-13 · **Runs:** `temp/rho_probe.py`, `temp/rho_tail.py`
+**Result:** within-window rho is negative on median in every family
+(-0.26..-0.33) and opens on 0-1.5% of windows; population-level rho between
+the two detectors is 0.27-0.31 on EVERY family including WebAttacks — it
+cannot tell a good detector day from a bad one. WebAttacks' anti-correlation
+(0.1023 host AUC) lives in 75 of 25,135 host-windows; any population
+aggregate is swamped by the benign mass. Label-free gate must be per-ALERT,
+not per-population.
+
+---
+
+## RC-03 — The fusion problem, precisely stated
+
+**Date:** 2026-08-13 · **Runs:** `experiments/production_eval.py` (+`--with-m5a`)
+**Result:** re-measured on the CURRENT checkpoint, the old baseline numbers
+are stale: M5b alone is 0.8148/0.426 (changelog said 0.8322/0.300, measured
+before the last checkpoint retrain). Mean fusion = 0.7440/0.346 with
+WebAttacks at 0.1714 (below random — M5a is anti-correlated there, host AUC
+0.1023). Every previous fusion comparison was against a stale baseline.
+
+---
+
+## RC-02 — rank_cal: continuous src score
+
+**Date:** 2026-08-13 · **Run:** `experiments/production_eval.py --fusions mean --rules rank_mean rank_cal`
+**Result:** mean 0.7952/0.387 vs rank_mean 0.8148/0.426 — loses. Plateau is
+gone but raw calibrated scores saturate on attack days (RC-07 explains);
+also collapses Botnet/Infiltration AUC (0.5397/0.5257). Ablation only.
+
+---
+
+## RC-01 — Gate shape search begins
+
+**Date:** 2026-08-13 · **Runs:** `experiments/production_eval.py` with
+`fusion="agreement"` (window-rho gate, then per-edge gate)
+**Result:** the per-window and per-population gate signals are dead ends
+(RC-04); the per-edge agreement gate is the only shape that recovers
+WebAttacks without hurting everything else (RC-05).
+
+---
+
+## RC-09 � Gate axis closed: tau is a non-lever, both/edge variants lose, persistence is a dead end
+
+**Date:** 2026-08-13 � **Run:** experiments/e2_e3.py (45 combos � 7 families, shipped checkpoint, 300s, edge granularity)
+
+**Replica check passed:** gate=src/tau=0.5/p=0 reproduces production agreement 0.8304 AUC exactly (P@100 0.311 vs 0.313 reported � 0.002 rounding-level difference, noted).
+
+| family of configs | mean AUC | mean P@100 |
+|---|---|---|
+| M5b alone (reference) | 0.8391 | 0.324 |
+| agreement src, tau 0.25?0.75 | 0.8310 ? 0.8361 | 0.313 ? 0.311 |
+| agreement both (dst also top-k) | **0.8391** | 0.303 |
+| agreement edge (tau on raw edge error) | 0.8313 ? 0.8365 | 0.313 ? 0.311 |
+| **persistence p3 / p5 (E3)** | **0.733-0.767** | **0.16-0.21** |
+
+Verdict:
+- **tau is a non-lever** (+0.005 across 0.25?0.75 = below the 6-point band; the gate's protection comes from the top-k + per-flow conditions, not the theta).
+- **both-gate** (conversant must also be anomalous) restores full M5b AUC but costs the P@100 the src-gate gains (0.303 vs 0.313) � it lets M5a contribute nothing. Not a default change.
+- **edge-gate** is equivalent to src within noise.
+- **E3 persistence is a dead end**: rewarding hosts that sit in consecutive windows' top halves rewards BUSY SERVERS, not attackers � AUC falls ~10 points on src:p3/p5, P@100 falls ~0.10. Same shape as gotcha #6 (busy fileserver reads as scanner) expressed temporally.
+- **The gate/fusion/window axis is closed at 0.8304-0.8391 edge AUC on the current checkpoint.** The remaining levers are the MODEL: similarity edges (E4), retrained checkpoints (E1 bands), and the UNSW transfer arm.

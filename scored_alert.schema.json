@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ScoredAlert",
+  "type": "object",
+  "properties": {
+    "alert_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "src_ip": {
+      "type": "string"
+    },
+    "dst_ip": {
+      "type": "string"
+    },
+    "anomaly_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "risk_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "attack_type_guess": {
+      "type": "string"
+    },
+    "mitre_technique": {
+      "type": "string"
+    },
+    "explanation": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "model_source": {
+      "type": "string"
+    },
+    "is_adversarial_test": {
+      "type": "boolean"
+    },
+    "feature_vector": {
+  "type": "array",
+  "items": {
+    "type": "number"
+  },
+  "minItems": 76,
+  "maxItems": 76,
+  "description": "Raw 76-element normalized input vector — required by C for SHAP analysis"
+}
+  },
+  "required": [
+    "alert_id",
+    "timestamp",
+    "src_ip",
+    "dst_ip",
+    "anomaly_score",
+    "confidence",
+    "risk_score",
+    "attack_type_guess",
+    "mitre_technique",
+    "explanation",
+    "model_source",
+    "is_adversarial_test",
+    "feature_vector"
+  ]
+}
